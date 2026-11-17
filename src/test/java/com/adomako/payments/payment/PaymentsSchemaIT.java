@@ -64,7 +64,8 @@ class PaymentsSchemaIT extends AbstractIT {
   @Test
   void acceptsBoundaryAmounts() {
     insertPayment(validPayment("amount_minor", 500L, "captured_minor", 500L));
-    insertPayment(validPayment("captured_minor", 700L, "refunded_minor", 700L));
+    insertPayment(
+        validPayment("status", "REFUNDED", "captured_minor", 700L, "refunded_minor", 700L));
     insertPayment(validPayment("status", "PENDING", "captured_minor", 0L));
   }
 
@@ -123,6 +124,53 @@ class PaymentsSchemaIT extends AbstractIT {
 
   private static Object[] over(Object... overrides) {
     return overrides;
+  }
+
+  private static Arguments amounts(String status, long captured, long refunded) {
+    return Arguments.of(status, captured, refunded);
+  }
+
+  static Stream<Arguments> statusAmountsThatMatch() {
+    return Stream.of(
+        amounts("PENDING", 0, 0),
+        amounts("AUTHORIZED", 0, 0),
+        amounts("FAILED", 0, 0),
+        amounts("CAPTURED", 1000, 0),
+        amounts("CAPTURED", 600, 0),
+        amounts("PARTIALLY_REFUNDED", 1000, 300),
+        amounts("REFUNDED", 1000, 1000),
+        amounts("REFUNDED", 600, 600));
+  }
+
+  static Stream<Arguments> statusAmountsThatDoNotMatch() {
+    return Stream.of(
+        amounts("PENDING", 100, 0),
+        amounts("AUTHORIZED", 100, 0),
+        amounts("FAILED", 100, 0),
+        amounts("CAPTURED", 0, 0),
+        amounts("CAPTURED", 1000, 300),
+        amounts("PARTIALLY_REFUNDED", 1000, 0),
+        amounts("PARTIALLY_REFUNDED", 1000, 1000),
+        amounts("REFUNDED", 1000, 300),
+        amounts("REFUNDED", 0, 0));
+  }
+
+  @ParameterizedTest(name = "[{index}] {0} captured={1} refunded={2}")
+  @MethodSource("statusAmountsThatMatch")
+  void acceptsStatusMatchingAmounts(String status, long captured, long refunded) {
+    insertPayment(
+        validPayment("status", status, "captured_minor", captured, "refunded_minor", refunded));
+  }
+
+  @ParameterizedTest(name = "[{index}] {0} captured={1} refunded={2}")
+  @MethodSource("statusAmountsThatDoNotMatch")
+  void rejectsStatusNotMatchingAmounts(String status, long captured, long refunded) {
+    Map<String, Object> row =
+        validPayment("status", status, "captured_minor", captured, "refunded_minor", refunded);
+
+    assertThatThrownBy(() -> insertPayment(row))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("payments_status_matches_amounts");
   }
 
   @ParameterizedTest(name = "[{index}] {0} -> {1}")
