@@ -46,3 +46,29 @@
 - **Choice:** `record Money(long minorUnits, java.util.Currency currency)`. `Money.of` rejects negatives; `subtract` refuses a negative result; `subtractAllowingNegative` is the only way to get one. Mismatched currencies throw `CurrencyMismatchException` (an `IllegalArgumentException`). Overflow throws via `Math.addExact`/`subtractExact`. `toDisplayString()` takes decimal places from the currency and ignores locale.
 - **Alternatives:** A final class with a private constructor (could block `new Money(-5, CAD)` entirely); a currency code `String` or custom enum instead of `java.util.Currency`.
 - **Trade-off:** A record's canonical constructor must be public, so negatives can still be built with `new Money(...)`. The convention is to always use `Money.of`. In exchange we get value equality, `hashCode` and accessors for free. `java.util.Currency` gives ISO-4217 validation and decimal places without a lookup table.
+
+## 2026-11-17: Payment status transitions live in the enum
+
+- **Context:** Payment state changes must follow one agreed state machine, and every service that moves a payment must use the same rules.
+- **Choice:** `PaymentStatus` holds a static transition map as the single source of truth; services call `requireTransitionTo`, which throws `IllegalPaymentTransitionException`. Allowed: PENDING→AUTHORIZED/FAILED, AUTHORIZED→CAPTURED/FAILED, CAPTURED→PARTIALLY_REFUNDED/REFUNDED, PARTIALLY_REFUNDED→PARTIALLY_REFUNDED/REFUNDED. REFUNDED and FAILED are terminal. No auto-capture (PENDING→CAPTURED).
+- **Alternatives:** A transition table in the database enforced by a trigger; Spring Statemachine.
+- **Trade-off:** The database cannot reject an illegal transition on its own. It only enforces valid status values and the amount invariants (`amount > 0`, `0 <= refunded <= captured <= amount`) through named CHECK constraints, which `PaymentsSchemaIT` proves. Simple, testable Java in exchange for trusting the app layer on transitions.
+
+## 2026-11-17: processor_ref is unique
+
+- **Context:** One processor charge must never map to two payments, or a processor callback could update the wrong one.
+- **Choice:** `UNIQUE (processor_ref)`; NULL allowed (and repeatable) until the processor responds.
+- **Alternatives:** No constraint; uniqueness per merchant.
+- **Trade-off:** If a processor ever reuses refs across merchants we'd need to scope it per merchant.
+
+## 2026-11-17: why PARTIALLY_REFUNDED is its own state
+- **Easy to query:** WHERE status = 'PARTIALLY_REFUNDED' is simpler to read and index than an amount comparison, which helps with dashboards and support tools.
+- **Clearer for API clients and webhooks:** Merchants see an explicit state instead of having to compare refunded with captured themselves.
+- **Rules can depend on:** If partially refunded payments ever need different handling (disputes, reporting, settlement), you can branch on the status.
+
+## 2026-11-17: Payment status must match its amounts
+
+- **Context:** `status` and `captured_minor`/`refunded_minor` both describe how far a payment has progressed. Without a link between them they can drift (e.g. `CAPTURED` with a refund recorded).
+- **Choice:** `payments_status_matches_amounts` CHECK in V2: PENDING/AUTHORIZED/FAILED have nothing captured or refunded; CAPTURED has `captured > 0` and no refund; PARTIALLY_REFUNDED has `0 < refunded < captured`; REFUNDED has `refunded = captured > 0`. Written as `CASE status ... ELSE TRUE` so unknown statuses are left to `payments_status_valid`. Postgres reports failing CHECKs in name order, and each constraint should have one job.
+- **Alternatives:** Drop PARTIALLY_REFUNDED and derive it from the amounts; enforce consistency only in Java.
+- **Trade-off:** Status and amounts must be written in the same UPDATE. In return the database rejects any row whose status disagrees with its money. Folded into V2 (not a V3) because V2 had not been applied to any shared database yet.
