@@ -7,6 +7,11 @@
 - **Alternatives:** Boot 3.5.x.
 - **Trade-off:** Newer, so fewer examples online and some renamed modules, but no migration later.
 
+## 2026-11-17: Failsafe vs Surefire
+- These are the official build plugins for Apache Maven used to execute automated tests in Java projects.
+- **Surefire:** Runs fast, isolated unit tests during the test phase of the Maven build lifecycle
+- **Failsafe:** Runs broader integration tests (which may rely on external resources like databases, web servers, or Docker containers) during the integration-test and verify phases.
+
 ## 2026-11-17: Integration tests run under Failsafe
 
 - **Context:** Integration tests need Docker; unit tests should run without it.
