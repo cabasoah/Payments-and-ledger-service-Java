@@ -3,7 +3,7 @@
 A merchant payments service: payments, captures, refunds, a double-entry ledger that always balances, and signed webhooks.
 
 ## Stack
-- Java 21, Spring Boot 3.x, Maven (wrapper: `./mvnw`)
+- Java 21, Spring Boot 4.x, Maven (wrapper: `./mvnw`)
 - PostgreSQL 16, Flyway migrations (`src/main/resources/db/migration`)
 - RabbitMQ (outbox relay, webhook delivery, dead-letter queue)
 - JUnit 5, AssertJ, Testcontainers (Postgres + RabbitMQ), k6 for load tests
