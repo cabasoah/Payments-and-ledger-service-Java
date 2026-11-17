@@ -8,6 +8,7 @@
 - **Trade-off:** Newer, so fewer examples online and some renamed modules, but no migration later.
 
 ## 2026-11-17: Failsafe vs Surefire
+
 - These are the official build plugins for Apache Maven used to execute automated tests in Java projects.
 - **Surefire:** Runs fast, isolated unit tests during the test phase of the Maven build lifecycle
 - **Failsafe:** Runs broader integration tests (which may rely on external resources like databases, web servers, or Docker containers) during the integration-test and verify phases.
@@ -62,6 +63,7 @@
 - **Trade-off:** If a processor ever reuses refs across merchants we'd need to scope it per merchant.
 
 ## 2026-11-17: why PARTIALLY_REFUNDED is its own state
+
 - **Easy to query:** WHERE status = 'PARTIALLY_REFUNDED' is simpler to read and index than an amount comparison, which helps with dashboards and support tools.
 - **Clearer for API clients and webhooks:** Merchants see an explicit state instead of having to compare refunded with captured themselves.
 - **Rules can depend on:** If partially refunded payments ever need different handling (disputes, reporting, settlement), you can branch on the status.
