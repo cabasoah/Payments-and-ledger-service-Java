@@ -27,6 +27,18 @@ CREATE TABLE payments (
         'PENDING', 'AUTHORIZED', 'CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'FAILED')),
     CONSTRAINT payments_captured_range CHECK (captured_minor >= 0 AND captured_minor <= amount_minor),
     CONSTRAINT payments_refunded_range CHECK (refunded_minor >= 0 AND refunded_minor <= captured_minor),
+    -- Status must agree with the amounts. Unknown statuses fall to ELSE TRUE so that
+    -- payments_status_valid (not this constraint) is the one that rejects them.
+    CONSTRAINT payments_status_matches_amounts CHECK (
+        CASE status
+            WHEN 'PENDING'            THEN captured_minor = 0 AND refunded_minor = 0
+            WHEN 'AUTHORIZED'         THEN captured_minor = 0 AND refunded_minor = 0
+            WHEN 'FAILED'             THEN captured_minor = 0 AND refunded_minor = 0
+            WHEN 'CAPTURED'           THEN captured_minor > 0 AND refunded_minor = 0
+            WHEN 'PARTIALLY_REFUNDED' THEN refunded_minor > 0 AND refunded_minor < captured_minor
+            WHEN 'REFUNDED'           THEN refunded_minor > 0 AND refunded_minor = captured_minor
+            ELSE TRUE
+        END),
     CONSTRAINT payments_processor_ref_unique UNIQUE (processor_ref)
 );
 
