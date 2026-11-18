@@ -210,4 +210,55 @@ class PaymentsSchemaIT extends AbstractIT {
         .isInstanceOf(DataIntegrityViolationException.class)
         .hasMessageContaining("merchants_name_not_blank");
   }
+
+  private UUID insertCapturedPayment() {
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO payments (id, merchant_id, amount_minor, currency, status, captured_minor)
+        VALUES (:id, :merchantId, 1000, 'CAD', 'CAPTURED', 1000)
+        """,
+        Map.of("id", id, "merchantId", insertMerchant("Refund Merchant")));
+    return id;
+  }
+
+  private void insertRefund(Object paymentId, long amount, String currency) {
+    jdbc.update(
+        """
+        INSERT INTO refunds (payment_id, amount_minor, currency)
+        VALUES (:paymentId, :amount, :currency)
+        """,
+        Map.of("paymentId", paymentId, "amount", amount, "currency", currency));
+  }
+
+  @Test
+  void acceptsValidRefund() {
+    insertRefund(insertCapturedPayment(), 300, "CAD");
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {0, -1})
+  void rejectsNonPositiveRefund(long amount) {
+    UUID paymentId = insertCapturedPayment();
+
+    assertThatThrownBy(() -> insertRefund(paymentId, amount, "CAD"))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("refunds_amount_positive");
+  }
+
+  @Test
+  void rejectsRefundWithBadCurrency() {
+    UUID paymentId = insertCapturedPayment();
+
+    assertThatThrownBy(() -> insertRefund(paymentId, 300, "cad"))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("refunds_currency_format");
+  }
+
+  @Test
+  void rejectsRefundForUnknownPayment() {
+    assertThatThrownBy(() -> insertRefund(UUID.randomUUID(), 300, "CAD"))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("refunds_payment_fk");
+  }
 }
