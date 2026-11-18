@@ -93,7 +93,7 @@ Run the tests (Docker required for the integration tests):
 
 A minimal, low-cost deployment is defined in Terraform ([infra/terraform](infra/terraform)). It runs one container on **ECS Fargate** and a private **RDS PostgreSQL** database in `ca-central-1`, with the database password in **Secrets Manager** and a monthly **budget alert**.
 
-You need Terraform, the AWS CLI (run `aws configure` first) and Docker.
+You need Terraform, the AWS CLI and Docker. **[docs/DEPLOY.md](docs/DEPLOY.md)** walks through every step, from creating an AWS account to teardown.
 
 ```bash
 cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   # set alert_email
