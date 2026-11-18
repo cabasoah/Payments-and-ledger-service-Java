@@ -110,3 +110,45 @@
 - **Choice:** `AbstractIT` is `@Transactional`; each test's writes are rolled back.
 - **Alternatives:** Truncate tables between tests (impossible for ledger tables by design); a database per test class.
 - **Trade-off:** Code that runs on another thread (e.g. a request served by the embedded server) is outside the test transaction. We'll handle that when the first HTTP-level IT arrives.
+
+## 2026-11-17: API amounts are integer minor units
+
+- **Context:** Clients and the domain must agree on amounts with no rounding.
+- **Choice:** Requests and responses carry `amount` as an integer in minor units plus a `currency` code (`1050` + `CAD` = 10.50 CAD), mapped straight to `Money`. Refunds carry only `amount`; the currency is the payment's.
+- **Alternatives:** Decimal strings (`"10.50"`).
+- **Trade-off:** Clients must know each currency's decimal places (JPY has 0), but nothing is ever parsed as floating point.
+
+## 2026-11-17: A declined card is a 201 FAILED payment
+
+- **Context:** `tok_declined` is a normal business outcome, not a bad request.
+- **Choice:** `POST /v1/payments` stores the payment and returns 201 with `status: FAILED`. Only unknown tokens are an error (`422 INVALID_CARD_TOKEN`).
+- **Alternatives:** `402 CARD_DECLINED` problem response.
+- **Trade-off:** Clients must check `status`, but every attempt has a payment record to look up.
+
+## 2026-11-17: Errors are RFC 7807 problem+json with a code
+
+- **Context:** Clients need one error shape and a stable, machine-readable reason.
+- **Choice:** `ApiExceptionHandler` returns Spring's `ProblemDetail` (`type`, `title`, `status`, `detail`, `instance`) plus `code`; validation errors add `errors[{field, message}]`. Codes: `VALIDATION_FAILED`, `MALFORMED_REQUEST` (400), `MERCHANT_NOT_FOUND`, `PAYMENT_NOT_FOUND` (404), `INVALID_STATE_TRANSITION` (409), `INVALID_CARD_TOKEN`, `REFUND_EXCEEDS_CAPTURED` (422), `INTERNAL_ERROR` (500, generic detail, full error logged). Spring's own MVC errors (unknown path, wrong method) use the HTTP status name as `code`.
+- **Alternatives:** A custom error envelope.
+- **Trade-off:** Follows a standard that tools understand; `type` is a relative URI (`/problems/...`) until we host docs for it.
+
+## 2026-11-17: Capture and refund lock the payment row
+
+- **Context:** Refund totals must never exceed captured, even under concurrent requests; a payment is captured once.
+- **Choice:** Capture and refund load the payment with `SELECT … FOR UPDATE` (`PaymentRepository.findByIdForUpdate`), so concurrent requests run one at a time and each sees the latest totals. The payment, refund row and ledger journal share one transaction. The V2 CHECK constraints remain the backstop.
+- **Alternatives:** Optimistic locking only (`@Version`): concurrent valid refunds would fail and need client retries.
+- **Trade-off:** Requests for the same payment queue up. `ConcurrentPaymentIT` (10 parallel refunds, 5 parallel captures) passes with the lock and fails without it.
+
+## 2026-11-17: Refunds have their own table; the processor is a seam
+
+- **Context:** GET must list refunds, and a refund will later have its own lifecycle with a real processor.
+- **Choice:** A `refunds` table (V4), separate from ledger journals, which record money movement only. `FakeCardProcessor` (only `tok_visa_ok` / `tok_declined`) sits behind one `authorize` method so a real client with fault injection can replace it.
+- **Alternatives:** Derive refunds from ledger REFUND journals.
+- **Trade-off:** Refund rows and `payments.refunded_minor` must agree; they are written in the same transaction. BalanceCheck could also compare them later.
+
+## 2026-11-17: API tests use their own database
+
+- **Context:** HTTP requests run on server threads, so API tests commit. Their data is balanced, but it would change the global totals other ITs assert exactly.
+- **Choice:** `AbstractApiIT` has its own Postgres container (so its own Spring context) and runs `BalanceCheck` after every test.
+- **Alternatives:** Relative assertions in BalanceCheckIT; cleaning up (impossible for append-only ledger tables).
+- **Trade-off:** A second container and context, about 5 seconds per build.
