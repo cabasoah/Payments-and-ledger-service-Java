@@ -89,17 +89,34 @@ Run the tests (Docker required for the integration tests):
 ./mvnw verify
 ```
 
+## Deploy to AWS
+
+A minimal, low-cost deployment is defined in Terraform ([infra/terraform](infra/terraform)). It runs one container on **ECS Fargate** and a private **RDS PostgreSQL** database in `ca-central-1`, with the database password in **Secrets Manager** and a monthly **budget alert**.
+
+You need Terraform, the AWS CLI and Docker. **[docs/DEPLOY.md](docs/DEPLOY.md)** walks through every step, from creating an AWS account to teardown.
+
+```bash
+cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   # set alert_email
+./scripts/deploy.sh      # build, push and deploy; prints the app URL
+./scripts/app-url.sh     # print the URL again (it changes on every deploy)
+./scripts/teardown.sh    # delete everything, including the database
+```
+
+> **Cost:** about **$40/month** if left running (estimate from AWS on-demand prices), so tear it down when you're not using it.
+> This setup is deliberately minimal and **not production-ready** (no HTTPS, no authentication, single instance). See the [full list of gaps](docs/DECISIONS.md#2026-11-17-what-the-minimal-aws-setup-is-not-ready-for), which a later phase addresses.
+
 ## Roadmap
 
 - [x] Money type, payment state machine, database constraints
 - [x] Double-entry ledger with append-only enforcement and automated balance audit
 - [x] REST API: merchants, payments, capture, refunds, standard error format, OpenAPI docs
+- [x] Docker image and minimal AWS deployment (Terraform: ECS Fargate, RDS, Secrets Manager)
 - [ ] API key authentication per merchant
 - [ ] Idempotency keys (safe retries)
 - [ ] Transactional outbox and RabbitMQ events
 - [ ] Signed webhooks with retries and a dead-letter queue
 - [ ] Load testing (k6), metrics and tracing (OpenTelemetry, Prometheus, Grafana)
-- [ ] Cloud deployment (Terraform, AWS ECS Fargate, RDS)
+- [ ] Production-grade AWS: HTTPS load balancer, private subnets, remote Terraform state, CI/CD deploys
 
 ---
 
@@ -241,6 +258,9 @@ src/main/java/com/adomako/payments/
   ledger/      accounts, journals, balance check
   processor/   simulated card processor
 src/main/resources/db/migration/   Flyway SQL migrations
+infra/terraform/                   AWS infrastructure (ECS Fargate, RDS, ECR)
+scripts/                           deploy, app-url and teardown scripts
+Dockerfile                         multi-stage build, non-root runtime image
 docs/DECISIONS.md                  design decisions and trade-offs
 ```
 

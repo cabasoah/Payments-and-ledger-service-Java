@@ -21,3 +21,12 @@ jobs:
 
       - name: Build and test (unit + integration)
         run: ./mvnw -B -ntp verify
+
+      - name: Build Docker image
+        run: docker build -t payments-ledger:ci .
+
+      - name: Check Terraform formatting and validity
+        run: |
+          docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf hashicorp/terraform:1.17.2 fmt -check -recursive
+          docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf hashicorp/terraform:1.17.2 init -backend=false -input=false
+          docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf hashicorp/terraform:1.17.2 validate
