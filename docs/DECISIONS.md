@@ -8,6 +8,7 @@
 - **Trade-off:** Newer, so fewer examples online and some renamed modules, but no migration later.
 
 ## 2026-11-17: Failsafe vs Surefire
+
 - These are the official build plugins for Apache Maven used to execute automated tests in Java projects.
 - **Surefire:** Runs fast, isolated unit tests during the test phase of the Maven build lifecycle
 - **Failsafe:** Runs broader integration tests (which may rely on external resources like databases, web servers, or Docker containers) during the integration-test and verify phases.
@@ -62,6 +63,7 @@
 - **Trade-off:** If a processor ever reuses refs across merchants we'd need to scope it per merchant.
 
 ## 2026-11-17: why PARTIALLY_REFUNDED is its own state
+
 - **Easy to query:** WHERE status = 'PARTIALLY_REFUNDED' is simpler to read and index than an amount comparison, which helps with dashboards and support tools.
 - **Clearer for API clients and webhooks:** Merchants see an explicit state instead of having to compare refunded with captured themselves.
 - **Rules can depend on:** If partially refunded payments ever need different handling (disputes, reporting, settlement), you can branch on the status.
@@ -72,3 +74,39 @@
 - **Choice:** `payments_status_matches_amounts` CHECK in V2: PENDING/AUTHORIZED/FAILED have nothing captured or refunded; CAPTURED has `captured > 0` and no refund; PARTIALLY_REFUNDED has `0 < refunded < captured`; REFUNDED has `refunded = captured > 0`. Written as `CASE status ... ELSE TRUE` so unknown statuses are left to `payments_status_valid`. Postgres reports failing CHECKs in name order, and each constraint should have one job.
 - **Alternatives:** Drop PARTIALLY_REFUNDED and derive it from the amounts; enforce consistency only in Java.
 - **Trade-off:** Status and amounts must be written in the same UPDATE. In return the database rejects any row whose status disagrees with its money. Folded into V2 (not a V3) because V2 had not been applied to any shared database yet.
+
+## 2026-11-17: Ledger chart of accounts and posting table
+
+- **Context:** Every money movement must be recorded as balanced double entries, with a merchant's balance traceable to their payments.
+- **Choice:** Two account types. `PROCESSOR_RECEIVABLE` (platform asset, one per currency: captured money the processor owes us) and `MERCHANT_PAYABLE` (liability, one per merchant and currency: money we owe the merchant).
+
+  | Event | Debit | Credit | Amount |
+  |---|---|---|---|
+  | Authorize | (nothing) | (nothing) | |
+  | Capture | `PROCESSOR_RECEIVABLE` | `MERCHANT_PAYABLE` (merchant) | captured amount |
+  | Refund (partial or full) | `MERCHANT_PAYABLE` (merchant) | `PROCESSOR_RECEIVABLE` | refund amount |
+
+  A merchant's balance (credits − debits on their payable) therefore always equals Σ captured − Σ refunded.
+- **Alternatives:** Post authorizations as holds in memo accounts; a fuller chart (cash, fees, settlement) up front.
+- **Trade-off:** An authorization moves no money, so posting it would need memo accounts and a reversing journal on every capture, void and expiry. The hold is already visible as `status = AUTHORIZED`. Fees and payouts are not modelled yet; when payouts arrive, BalanceCheck's expected balance becomes captured − refunded − paid out.
+
+## 2026-11-17: Ledger is append-only, enforced by triggers
+
+- **Context:** Ledger history must never change; corrections are new reversing entries.
+- **Choice:** `ledger_reject_modification()` raises on `BEFORE UPDATE OR DELETE` (row) and `BEFORE TRUNCATE` (statement) on `ledger_entries` and `journal_transactions`. TRUNCATE needs its own trigger because it skips row triggers. Also: an entry's currency must match its account's (composite FK), and a payment can be captured into the ledger only once (partial unique index).
+- **Alternatives:** Only `REVOKE UPDATE, DELETE` from the app's DB role; rely on the app never issuing them.
+- **Trade-off:** A table owner can still `DISABLE TRIGGER`, so `BalanceCheck` audits the result independently. Revoking privileges from the app role is a good extra layer once we have separate migration and app roles.
+
+## 2026-11-17: Ledger uses JdbcClient, not JPA
+
+- **Context:** The ledger only inserts rows and runs aggregate queries.
+- **Choice:** `LedgerRepository` and `BalanceCheck` use plain SQL through Spring's `JdbcClient`. `LedgerService.post` checks that debits equal credits per currency (summed with `Money`) before anything is written, in one transaction.
+- **Alternatives:** JPA entities marked immutable.
+- **Trade-off:** No dirty checking or entity lifecycle that could ever issue an UPDATE, and the SQL is visible. In exchange we map rows by hand.
+
+## 2026-11-17: Integration tests roll back
+
+- **Context:** All ITs share one database, and `BalanceCheck` reads every row, so data left behind by one test breaks another.
+- **Choice:** `AbstractIT` is `@Transactional`; each test's writes are rolled back.
+- **Alternatives:** Truncate tables between tests (impossible for ledger tables by design); a database per test class.
+- **Trade-off:** Code that runs on another thread (e.g. a request served by the embedded server) is outside the test transaction. We'll handle that when the first HTTP-level IT arrives.
