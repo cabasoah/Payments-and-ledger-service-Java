@@ -15,3 +15,11 @@ Thumbs.db
 
 # Local secrets
 .env
+
+# Terraform (local state holds the DB password in plaintext; never commit it)
+infra/terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
