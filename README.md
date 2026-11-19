@@ -1,6 +1,6 @@
 # Payments & Ledger Service
 
-[![CI](https://github.com/cabasoah/Payments-and-ledger-service-Java-/actions/workflows/ci.yml/badge.svg)](https://github.com/cabasoah/Payments-and-ledger-service-Java-/actions/workflows/ci.yml)
+[![CI](https://github.com/cabasoah/Payments-and-ledger-service-Java/actions/workflows/ci.yml/badge.svg)](https://github.com/cabasoah/Payments-and-ledger-service-Java-/actions/workflows/ci.yml)
 
 A backend service that lets merchants **take card payments, capture them, and issue refunds**, while keeping a **double-entry accounting ledger** that is guaranteed to balance.
 
