@@ -1,6 +1,11 @@
 package com.adomako.payments.payment;
 
+import com.adomako.payments.idempotency.IdempotencyService;
+import com.adomako.payments.idempotency.IdempotentResponse;
+import com.adomako.payments.idempotency.RequestFingerprint;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -9,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.UUID;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -16,8 +22,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -43,10 +49,33 @@ public class PaymentController {
        "code": "PAYMENT_NOT_FOUND"}
       """;
 
-  private final PaymentService paymentService;
+  static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+  static final String REPLAYED = "Idempotent-Replayed";
+  private static final String KEY_DESCRIPTION =
+      "Unique per intended operation (e.g. a UUID). Retrying with the same key and request"
+          + " replays the original response (Idempotent-Replayed: true) instead of acting twice."
+          + " Keys expire after 24 hours.";
 
-  public PaymentController(PaymentService paymentService) {
+  private final PaymentService paymentService;
+  private final IdempotencyService idempotency;
+  private final RequestFingerprint fingerprint;
+
+  public PaymentController(
+      PaymentService paymentService,
+      IdempotencyService idempotency,
+      RequestFingerprint fingerprint) {
     this.paymentService = paymentService;
+    this.idempotency = idempotency;
+    this.fingerprint = fingerprint;
+  }
+
+  /** Adds {@code Idempotent-Replayed: true} when the response came from storage. */
+  private static HttpHeaders replayHeaders(IdempotentResponse<?> response) {
+    HttpHeaders headers = new HttpHeaders();
+    if (response.replayed()) {
+      headers.set(REPLAYED, "true");
+    }
+    return headers;
   }
 
   @PostMapping
@@ -98,9 +127,27 @@ public class PaymentController {
                            "status": 422, "detail": "Unknown card token. Use tok_visa_ok or tok_declined.",
                            "instance": "/v1/payments", "code": "INVALID_CARD_TOKEN"}
                           """)))
-  public ResponseEntity<PaymentResponse> create(@Valid @RequestBody CreatePaymentRequest request) {
-    PaymentResponse payment = paymentService.create(request);
-    return ResponseEntity.created(URI.create("/v1/payments/" + payment.id())).body(payment);
+  public ResponseEntity<PaymentResponse> create(
+      @Parameter(
+              in = ParameterIn.HEADER,
+              name = IDEMPOTENCY_KEY,
+              required = true,
+              description = KEY_DESCRIPTION,
+              example = "7d0b8f1e-3c2a-4b6d-9e5f-1a2b3c4d5e6f")
+          @RequestHeader(name = IDEMPOTENCY_KEY, required = false)
+          String key,
+      @Valid @RequestBody CreatePaymentRequest request) {
+    IdempotentResponse<PaymentResponse> result =
+        idempotency.execute(
+            request.merchantId(),
+            key,
+            fingerprint.of("POST", "/v1/payments", request),
+            PaymentResponse.class,
+            HttpStatus.CREATED.value(),
+            () -> paymentService.create(request));
+    return ResponseEntity.created(URI.create("/v1/payments/" + result.body().id()))
+        .headers(replayHeaders(result))
+        .body(result.body());
   }
 
   @PostMapping("/{id}/capture")
@@ -122,12 +169,28 @@ public class PaymentController {
               mediaType = PROBLEM_JSON,
               schema = @Schema(implementation = ProblemDetail.class),
               examples = @ExampleObject(value = INVALID_STATE_EXAMPLE)))
-  public PaymentResponse capture(@PathVariable UUID id) {
-    return paymentService.capture(id);
+  public ResponseEntity<PaymentResponse> capture(
+      @Parameter(
+              in = ParameterIn.HEADER,
+              name = IDEMPOTENCY_KEY,
+              required = true,
+              description = KEY_DESCRIPTION,
+              example = "7d0b8f1e-3c2a-4b6d-9e5f-1a2b3c4d5e6f")
+          @RequestHeader(name = IDEMPOTENCY_KEY, required = false)
+          String key,
+      @PathVariable UUID id) {
+    IdempotentResponse<PaymentResponse> result =
+        idempotency.execute(
+            paymentService.merchantIdOf(id),
+            key,
+            fingerprint.of("POST", "/v1/payments/" + id + "/capture", null),
+            PaymentResponse.class,
+            HttpStatus.OK.value(),
+            () -> paymentService.capture(id));
+    return ResponseEntity.ok().headers(replayHeaders(result)).body(result.body());
   }
 
   @PostMapping("/{id}/refunds")
-  @ResponseStatus(HttpStatus.CREATED)
   @Operation(
       summary = "Refund part or all of the captured amount",
       requestBody =
@@ -170,8 +233,28 @@ public class PaymentController {
                            "instance": "/v1/payments/3f6c1a52-0d7e-4c0a-9a43-6d2f1b9e8c21/refunds",
                            "code": "REFUND_EXCEEDS_CAPTURED"}
                           """)))
-  public RefundResponse refund(@PathVariable UUID id, @Valid @RequestBody RefundRequest request) {
-    return paymentService.refund(id, request);
+  public ResponseEntity<RefundResponse> refund(
+      @Parameter(
+              in = ParameterIn.HEADER,
+              name = IDEMPOTENCY_KEY,
+              required = true,
+              description = KEY_DESCRIPTION,
+              example = "7d0b8f1e-3c2a-4b6d-9e5f-1a2b3c4d5e6f")
+          @RequestHeader(name = IDEMPOTENCY_KEY, required = false)
+          String key,
+      @PathVariable UUID id,
+      @Valid @RequestBody RefundRequest request) {
+    IdempotentResponse<RefundResponse> result =
+        idempotency.execute(
+            paymentService.merchantIdOf(id),
+            key,
+            fingerprint.of("POST", "/v1/payments/" + id + "/refunds", request),
+            RefundResponse.class,
+            HttpStatus.CREATED.value(),
+            () -> paymentService.refund(id, request));
+    return ResponseEntity.status(HttpStatus.CREATED)
+        .headers(replayHeaders(result))
+        .body(result.body());
   }
 
   @GetMapping("/{id}")

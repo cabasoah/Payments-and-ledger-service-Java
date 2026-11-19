@@ -13,6 +13,11 @@ public enum ErrorCode {
   INVALID_STATE_TRANSITION(HttpStatus.CONFLICT, "Invalid payment state transition"),
   INVALID_CARD_TOKEN(HttpStatus.UNPROCESSABLE_CONTENT, "Invalid card token"),
   REFUND_EXCEEDS_CAPTURED(HttpStatus.UNPROCESSABLE_CONTENT, "Refund exceeds captured amount"),
+  IDEMPOTENCY_KEY_MISSING(HttpStatus.BAD_REQUEST, "Idempotency-Key header is required"),
+  IDEMPOTENCY_KEY_REUSED(
+      HttpStatus.UNPROCESSABLE_CONTENT, "Idempotency-Key was used for a different request"),
+  IDEMPOTENCY_REQUEST_IN_PROGRESS(
+      HttpStatus.CONFLICT, "A request with this Idempotency-Key is still in progress"),
   INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Internal error");
 
   private final HttpStatus status;
