@@ -76,6 +76,15 @@ public class PaymentService {
     return RefundResponse.from(refund);
   }
 
+  /** The merchant that owns this payment; idempotency keys are scoped to it. */
+  @Transactional(readOnly = true)
+  public UUID merchantIdOf(UUID paymentId) {
+    return payments
+        .findById(paymentId)
+        .map(Payment::getMerchantId)
+        .orElseThrow(() -> notFound(paymentId));
+  }
+
   @Transactional(readOnly = true)
   public PaymentResponse get(UUID paymentId) {
     Payment payment = payments.findById(paymentId).orElseThrow(() -> notFound(paymentId));

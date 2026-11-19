@@ -130,8 +130,9 @@ Open `$URL/swagger-ui.html` in a browser, or run the payment walkthrough:
 MERCHANT=$(curl -s -X POST $URL/v1/merchants \
   -H 'Content-Type: application/json' -d '{"name":"Acme Coffee"}' | jq -r .id)
 PAYMENT=$(curl -s -X POST $URL/v1/payments -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $(date +%s%N)" \
   -d "{\"merchantId\":\"$MERCHANT\",\"amount\":1050,\"currency\":\"CAD\",\"cardToken\":\"tok_visa_ok\"}" | jq -r .id)
-curl -s -X POST $URL/v1/payments/$PAYMENT/capture
+curl -s -X POST $URL/v1/payments/$PAYMENT/capture -H "Idempotency-Key: $(date +%s%N)"
 curl -s $URL/v1/payments/$PAYMENT
 ```
 
