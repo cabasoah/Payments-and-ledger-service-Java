@@ -29,6 +29,7 @@ It is built the way real payment systems are built: money is never stored as flo
 | **Accounting records being changed after the fact** | The ledger is append-only. Database triggers reject any edit or delete, so mistakes are corrected with new reversing entries, as in real bookkeeping. |
 | **Silent data corruption** | An automated balance check uses SQL to prove that total debits equal total credits, and that each merchant's balance matches their payments. A test deliberately corrupts a record and confirms the check catches it. |
 | **Bad data reaching the database** | The database itself enforces the money rules (e.g. refunded ≤ captured ≤ amount, status must match amounts), as a second line of defence behind the application code. |
+| **A client retrying after a timeout and charging the customer twice** | Every money-moving request needs an `Idempotency-Key`. A retry with the same key replays the original response instead of acting again; the key is saved in the same database transaction as the payment. A test fires 20 identical requests at once and checks that exactly one payment and one set of ledger entries are created. |
 | **Unclear API errors** | Every error follows the RFC 7807 standard (`application/problem+json`) with a stable error code. |
 
 ### How it was built
@@ -69,15 +70,20 @@ Then open **http://localhost:8080/swagger-ui.html** to explore and call the API 
 <summary>Or try it from the command line</summary>
 
 ```bash
+# POSTs that move money need an Idempotency-Key: any unique string (a UUID is typical).
+# Re-sending the same request with the same key replays the first response instead of charging twice.
 MERCHANT=$(curl -s -X POST localhost:8080/v1/merchants \
   -H 'Content-Type: application/json' -d '{"name":"Acme Coffee"}' | jq -r .id)
 
 PAYMENT=$(curl -s -X POST localhost:8080/v1/payments -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $(date +%s%N)" \
   -d "{\"merchantId\":\"$MERCHANT\",\"amount\":1050,\"currency\":\"CAD\",\"cardToken\":\"tok_visa_ok\"}" | jq -r .id)
 
-curl -s -X POST localhost:8080/v1/payments/$PAYMENT/capture                      # collect $10.50
+curl -s -X POST localhost:8080/v1/payments/$PAYMENT/capture \
+  -H "Idempotency-Key: $(date +%s%N)"                                               # collect $10.50
 curl -s -X POST localhost:8080/v1/payments/$PAYMENT/refunds \
-  -H 'Content-Type: application/json' -d '{"amount":300}'                       # refund $3.00
+  -H 'Content-Type: application/json' -H "Idempotency-Key: $(date +%s%N)" \
+  -d '{"amount":300}'                                                            # refund $3.00
 curl -s localhost:8080/v1/payments/$PAYMENT                                      # PARTIALLY_REFUNDED
 ```
 
@@ -112,7 +118,7 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   #
 - [x] REST API: merchants, payments, capture, refunds, standard error format, OpenAPI docs
 - [x] Docker image and minimal AWS deployment (Terraform: ECS Fargate, RDS, Secrets Manager)
 - [ ] API key authentication per merchant
-- [ ] Idempotency keys (safe retries)
+- [x] Idempotency keys (safe retries), including under concurrent duplicates
 - [ ] Transactional outbox and RabbitMQ events
 - [ ] Signed webhooks with retries and a dead-letter queue
 - [ ] Load testing (k6), metrics and tracing (OpenTelemetry, Prometheus, Grafana)
@@ -183,6 +189,9 @@ Card tokens are simulated; real card numbers are never accepted.
 | `INVALID_STATE_TRANSITION` | 409 | e.g. capture twice, refund before capture |
 | `INVALID_CARD_TOKEN` | 422 | Token isn't `tok_visa_ok` or `tok_declined` |
 | `REFUND_EXCEEDS_CAPTURED` | 422 | Refund total would exceed the captured amount |
+| `IDEMPOTENCY_KEY_MISSING` | 400 | `Idempotency-Key` header missing or blank on a POST that moves money |
+| `IDEMPOTENCY_KEY_REUSED` | 422 | The key was already used for a different request |
+| `IDEMPOTENCY_REQUEST_IN_PROGRESS` | 409 | A request with the same key is still running; retry shortly |
 | `INTERNAL_ERROR` | 500 | Unexpected error (details are logged, not returned) |
 
 </details>

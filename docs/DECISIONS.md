@@ -188,3 +188,22 @@ Known gaps, to fix in Phase 3 (auth) and Phase 4 (infrastructure):
 8. **Default VPC**: the database's subnets route to the internet gateway (still unreachable: no public IP, and its security group admits only the app), but there's no private-subnet isolation.
 9. **Supply chain**: base images not pinned by digest, mutable ECR tags, no image signing.
 10. **Operations**: logs only (7 days), no metrics, alarms, tracing or runbook. Flyway migrates on app startup (risky with several tasks). Manual deploys from a laptop with personal credentials, no CD pipeline.
+
+## 2026-11-18: Idempotency keys in the same transaction, with an advisory try-lock
+
+- **Context:** A client that retries after a timeout must never charge, capture or refund twice. CLAUDE.md requires money changes to be safe under retries and concurrency.
+- **Choice:** `POST /v1/payments`, `/capture` and `/refunds` require an `Idempotency-Key` header (1–255 chars), scoped per merchant. `IdempotencyService.execute` runs in **one transaction** with the business operation:
+  1. `pg_try_advisory_xact_lock(hash(merchant, key))`. If it's held, return `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` immediately.
+  2. Look up the key: expired keys are deleted and the request runs again; a matching fingerprint replays the stored status and body (`Idempotent-Replayed: true`); a different fingerprint returns `422 IDEMPOTENCY_KEY_REUSED`.
+  3. Insert the key `IN_PROGRESS`, run the operation, store the response as `COMPLETED`, commit.
+
+  The fingerprint is SHA-256 of method + path + the request body as key-sorted JSON, so the same body sent to another payment is "different", and whitespace or field order don't matter. Keys live 24 hours; an hourly job deletes expired ones. `POST /v1/merchants` has no key: it moves no money, and has no merchant to scope a key to until Phase 3.
+- **Alternatives:** Two transactions (commit `IN_PROGRESS` first, then do the work), which leaves stuck keys after a crash and needs recovery; blocking on the primary key instead of a try-lock (duplicates would wait and replay rather than get 409); a servlet filter (can't share the business transaction).
+- **Trade-off:** Because the key and the business write commit together, a committed key is always `COMPLETED`; `IN_PROGRESS` exists only inside the open transaction, which is why the advisory lock is needed to detect it. The primary key `(merchant_id, idempotency_key)` is the backstop: with the lock removed, duplicates still never act twice, but they fail with 500 instead of a clean 409 (`ConcurrentIdempotencyIT` shows this). A 64-bit hash collision between two different keys could give a rare false 409; the client simply retries. Re-using a key after 24 hours runs the request again, as documented.
+
+## 2026-11-18: Only successful responses are stored for an Idempotency-Key
+
+- **Context:** Should a retry replay an earlier error (e.g. `REFUND_EXCEEDS_CAPTURED`) or run again?
+- **Choice:** Only 2xx results are stored. A declined card is a 201 `FAILED` payment, so it is stored and never re-authorized. When the operation throws, the transaction rolls back and the key row with it, so the client can fix the request and retry with the same key.
+- **Alternatives:** Store 4xx business errors too (Stripe-like), using a savepoint to roll back the business writes while committing the key.
+- **Trade-off:** Much simpler and falls out of the single transaction. A retried failure re-runs, which is safe because a failed request changed nothing.
