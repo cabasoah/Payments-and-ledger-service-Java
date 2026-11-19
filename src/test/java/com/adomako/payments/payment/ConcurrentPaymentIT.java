@@ -3,55 +3,19 @@ package com.adomako.payments.payment;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.adomako.payments.AbstractApiIT;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
 /**
  * Many requests hit the same payment at the same moment. Refund totals must never exceed the
  * captured amount, and a payment is captured exactly once.
+ *
+ * <p>Each request here has its own Idempotency-Key: these are different intents, not retries.
  */
 class ConcurrentPaymentIT extends AbstractApiIT {
-
-  /** Releases {@code count} copies of {@code request} at the same moment; returns the responses. */
-  private static List<ResponseEntity<Map<String, Object>>> fireTogether(
-      int count, Callable<ResponseEntity<Map<String, Object>>> request) throws Exception {
-    ExecutorService pool = Executors.newFixedThreadPool(count);
-    CountDownLatch start = new CountDownLatch(1);
-    try {
-      List<Future<ResponseEntity<Map<String, Object>>>> futures = new ArrayList<>();
-      for (int i = 0; i < count; i++) {
-        futures.add(
-            pool.submit(() -> {
-              start.await();
-              return request.call();
-            }));
-      }
-      start.countDown();
-
-      List<ResponseEntity<Map<String, Object>>> responses = new ArrayList<>();
-      for (Future<ResponseEntity<Map<String, Object>>> future : futures) {
-        responses.add(future.get(30, TimeUnit.SECONDS));
-      }
-      return responses;
-    } finally {
-      pool.shutdownNow();
-    }
-  }
-
-  private static List<ResponseEntity<Map<String, Object>>> withStatus(
-      List<ResponseEntity<Map<String, Object>>> responses, int status) {
-    return responses.stream().filter(r -> r.getStatusCode().value() == status).toList();
-  }
 
   @Test
   void concurrentRefundsNeverExceedCaptured() throws Exception {
