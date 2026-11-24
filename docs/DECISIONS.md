@@ -221,3 +221,10 @@ Known gaps, to fix in Phase 3 (auth) and Phase 4 (infrastructure):
 - **Choice:** `PaymentCommands` holds the `IdempotencyService.execute` calls for create, capture and refund, with the fingerprint built from the REST method and path (`POST /v1/payments/{id}/refunds`). `PaymentController` and the MCP tools both call it.
 - **Alternatives:** Duplicate the calls in the MCP tools; have the MCP tools call the REST API over HTTP.
 - **Trade-off:** One more small class, and MCP fingerprints are named after REST paths. In exchange, a key means one operation however it arrives, and the existing idempotency tests cover both entry points.
+
+## 2026-11-23: Read paths for listing payments and a payment's ledger, without new REST endpoints
+
+- **Context:** The MCP tools `list_payments` and `get_ledger_balance` need data the REST API doesn't expose: a merchant's recent payments, and the ledger entries for one payment.
+- **Choice:** Read-only service methods, no new endpoints. `PaymentService.listRecent(merchantId, limit)` returns the newest payments first (limit 1–100, `MERCHANT_NOT_FOUND` for an unknown merchant), each with its refunds, loaded in one extra query instead of one per payment. `LedgerService.entriesForPayment` reads the entries with one JdbcClient SELECT and wraps them in `PaymentLedger`, which sums debits and credits per currency with `Money` and reports `balanced` and the merchant's payable balance (credits − debits, which should equal captured − refunded). An unknown payment id gives an empty ledger, because the ledger package doesn't depend on payments; callers check that the payment exists first.
+- **Alternatives:** Add `GET /v1/merchants/{id}/payments` and `GET /v1/payments/{id}/ledger` and have the tools call them; a summary type for the list without refunds.
+- **Trade-off:** These reads exist only for in-process callers until a REST client needs them. Adding endpoints later is a thin controller over the same methods.

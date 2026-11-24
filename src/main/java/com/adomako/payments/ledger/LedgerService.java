@@ -59,7 +59,7 @@ public class LedgerService {
   /** Every entry recorded for this payment. Empty if nothing has been captured. */
   @Transactional(readOnly = true)
   public PaymentLedger entriesForPayment(UUID paymentId) {
-    throw new UnsupportedOperationException("not implemented yet");
+    return new PaymentLedger(paymentId, repository.entriesForPayment(paymentId));
   }
 
   private static void requireBalanced(Journal journal) {
