@@ -11,6 +11,7 @@ import com.adomako.payments.payment.PaymentResponse;
 import com.adomako.payments.payment.PaymentStatus;
 import com.adomako.payments.payment.RefundResponse;
 import java.time.Instant;
+import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,18 +23,24 @@ public final class ToolOutputs {
 
   private ToolOutputs() {}
 
+  private static Money money(long minorUnits, String currency) {
+    return Money.of(minorUnits, Currency.getInstance(currency));
+  }
+
   /** {@code {"amount": 1050, "currency": "CAD", "display": "10.50 CAD"}}. */
   public record MoneyView(long amount, String currency, String display) {
 
     static MoneyView of(Money money) {
-      throw new UnsupportedOperationException("not implemented yet");
+      return new MoneyView(
+          money.minorUnits(), money.currency().getCurrencyCode(), money.toDisplayString());
     }
   }
 
   public record RefundView(UUID id, MoneyView amount, Instant createdAt) {
 
     static RefundView from(RefundResponse refund) {
-      throw new UnsupportedOperationException("not implemented yet");
+      return new RefundView(
+          refund.id(), MoneyView.of(money(refund.amount(), refund.currency())), refund.createdAt());
     }
   }
 
@@ -51,7 +58,19 @@ public final class ToolOutputs {
       Instant updatedAt) {
 
     static PaymentView from(PaymentResponse payment) {
-      throw new UnsupportedOperationException("not implemented yet");
+      Money captured = money(payment.capturedAmount(), payment.currency());
+      Money refunded = money(payment.refundedAmount(), payment.currency());
+      return new PaymentView(
+          payment.id(),
+          payment.merchantId(),
+          payment.status(),
+          MoneyView.of(money(payment.amount(), payment.currency())),
+          MoneyView.of(captured),
+          MoneyView.of(refunded),
+          MoneyView.of(captured.subtract(refunded)),
+          payment.refunds().stream().map(RefundView::from).toList(),
+          payment.createdAt(),
+          payment.updatedAt());
     }
   }
 
@@ -73,14 +92,25 @@ public final class ToolOutputs {
       Instant createdAt) {
 
     static EntryView from(LedgerEntryView entry) {
-      throw new UnsupportedOperationException("not implemented yet");
+      return new EntryView(
+          entry.journalId(),
+          entry.journalKind(),
+          entry.accountType(),
+          entry.merchantId(),
+          entry.direction(),
+          MoneyView.of(entry.amount()),
+          entry.createdAt());
     }
   }
 
   public record TotalsView(String currency, MoneyView debits, MoneyView credits, boolean balanced) {
 
     static TotalsView from(CurrencyTotals totals) {
-      throw new UnsupportedOperationException("not implemented yet");
+      return new TotalsView(
+          totals.debits().currency().getCurrencyCode(),
+          MoneyView.of(totals.debits()),
+          MoneyView.of(totals.credits()),
+          totals.balanced());
     }
   }
 
@@ -101,7 +131,20 @@ public final class ToolOutputs {
       List<EntryView> entries) {
 
     static LedgerBalance from(PaymentResponse payment, PaymentLedger ledger) {
-      throw new UnsupportedOperationException("not implemented yet");
+      Currency currency = Currency.getInstance(payment.currency());
+      Money expected =
+          money(payment.capturedAmount(), payment.currency())
+              .subtract(money(payment.refundedAmount(), payment.currency()));
+      Money actual = ledger.merchantPayableBalance(currency);
+      return new LedgerBalance(
+          payment.id(),
+          payment.status(),
+          ledger.balanced(),
+          actual.equals(expected),
+          MoneyView.of(actual),
+          MoneyView.of(expected),
+          ledger.totals().stream().map(TotalsView::from).toList(),
+          ledger.entries().stream().map(EntryView::from).toList());
     }
   }
 }

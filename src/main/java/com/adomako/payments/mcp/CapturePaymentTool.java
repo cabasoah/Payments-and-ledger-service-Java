@@ -1,7 +1,12 @@
 package com.adomako.payments.mcp;
 
+import com.adomako.payments.idempotency.IdempotentResponse;
+import com.adomako.payments.mcp.ToolOutputs.PaymentResult;
+import com.adomako.payments.mcp.ToolOutputs.PaymentView;
 import com.adomako.payments.payment.PaymentCommands;
+import com.adomako.payments.payment.PaymentResponse;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
+import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -41,6 +46,10 @@ class CapturePaymentTool implements PaymentTool {
 
   @Override
   public Object call(ToolArguments arguments) {
-    throw new UnsupportedOperationException("not implemented yet");
+    UUID paymentId = arguments.requiredUuid("paymentId");
+    String key = arguments.idempotencyKey();
+
+    IdempotentResponse<PaymentResponse> result = commands.capture(key, paymentId);
+    return new PaymentResult(PaymentView.from(result.body()), result.replayed());
   }
 }

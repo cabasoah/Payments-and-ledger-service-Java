@@ -1,7 +1,11 @@
 package com.adomako.payments.mcp;
 
+import com.adomako.payments.mcp.ToolOutputs.PaymentList;
+import com.adomako.payments.mcp.ToolOutputs.PaymentView;
 import com.adomako.payments.payment.PaymentService;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
+import java.util.List;
+import java.util.UUID;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -47,6 +51,10 @@ class ListPaymentsTool implements PaymentTool {
 
   @Override
   public Object call(ToolArguments arguments) {
-    throw new UnsupportedOperationException("not implemented yet");
+    UUID merchantId = arguments.requiredUuid("merchantId");
+    int limit = arguments.optionalInt("limit", DEFAULT_LIMIT);
+    List<PaymentView> recent =
+        payments.listRecent(merchantId, limit).stream().map(PaymentView::from).toList();
+    return new PaymentList(merchantId, recent.size(), recent);
   }
 }

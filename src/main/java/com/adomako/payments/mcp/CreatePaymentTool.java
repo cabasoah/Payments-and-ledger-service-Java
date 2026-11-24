@@ -1,6 +1,11 @@
 package com.adomako.payments.mcp;
 
+import com.adomako.payments.idempotency.IdempotentResponse;
+import com.adomako.payments.mcp.ToolOutputs.PaymentResult;
+import com.adomako.payments.mcp.ToolOutputs.PaymentView;
+import com.adomako.payments.payment.CreatePaymentRequest;
 import com.adomako.payments.payment.PaymentCommands;
+import com.adomako.payments.payment.PaymentResponse;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import jakarta.validation.Validator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -57,6 +62,16 @@ class CreatePaymentTool implements PaymentTool {
 
   @Override
   public Object call(ToolArguments arguments) {
-    throw new UnsupportedOperationException("not implemented yet");
+    CreatePaymentRequest request =
+        new CreatePaymentRequest(
+            arguments.requiredUuid("merchantId"),
+            arguments.requiredLong("amount"),
+            arguments.requiredString("currency"),
+            arguments.requiredString("cardToken"));
+    RequestValidation.requireValid(validator, request);
+    String key = arguments.idempotencyKey();
+
+    IdempotentResponse<PaymentResponse> result = commands.create(key, request);
+    return new PaymentResult(PaymentView.from(result.body()), result.replayed());
   }
 }

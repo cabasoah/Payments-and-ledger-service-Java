@@ -1,9 +1,17 @@
 package com.adomako.payments.mcp;
 
+import com.adomako.payments.idempotency.IdempotentResponse;
+import com.adomako.payments.mcp.ToolOutputs.PaymentView;
+import com.adomako.payments.mcp.ToolOutputs.RefundResult;
+import com.adomako.payments.mcp.ToolOutputs.RefundView;
 import com.adomako.payments.payment.PaymentCommands;
+import com.adomako.payments.payment.PaymentResponse;
 import com.adomako.payments.payment.PaymentService;
+import com.adomako.payments.payment.RefundRequest;
+import com.adomako.payments.payment.RefundResponse;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import jakarta.validation.Validator;
+import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -55,6 +63,14 @@ class RefundPaymentTool implements PaymentTool {
 
   @Override
   public Object call(ToolArguments arguments) {
-    throw new UnsupportedOperationException("not implemented yet");
+    UUID paymentId = arguments.requiredUuid("paymentId");
+    RefundRequest request = new RefundRequest(arguments.requiredLong("amount"));
+    RequestValidation.requireValid(validator, request);
+    String key = arguments.idempotencyKey();
+
+    IdempotentResponse<RefundResponse> result = commands.refund(key, paymentId, request);
+    PaymentResponse after = payments.get(paymentId);
+    return new RefundResult(
+        RefundView.from(result.body()), PaymentView.from(after), result.replayed());
   }
 }

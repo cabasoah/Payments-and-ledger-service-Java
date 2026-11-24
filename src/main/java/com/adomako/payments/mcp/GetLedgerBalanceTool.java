@@ -1,10 +1,15 @@
 package com.adomako.payments.mcp;
 
 import com.adomako.payments.ledger.LedgerService;
+import com.adomako.payments.mcp.ToolOutputs.LedgerBalance;
+import com.adomako.payments.payment.PaymentResponse;
 import com.adomako.payments.payment.PaymentService;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
+import java.util.UUID;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @Order(3)
@@ -41,8 +46,15 @@ class GetLedgerBalanceTool implements PaymentTool {
     return DEFINITION;
   }
 
+  /**
+   * Reads the payment and its entries in one REPEATABLE READ transaction, so a refund committed in
+   * between cannot make a healthy ledger look as if it disagrees with the payment.
+   */
   @Override
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public Object call(ToolArguments arguments) {
-    throw new UnsupportedOperationException("not implemented yet");
+    UUID paymentId = arguments.requiredUuid("paymentId");
+    PaymentResponse payment = payments.get(paymentId);
+    return LedgerBalance.from(payment, ledger.entriesForPayment(paymentId));
   }
 }

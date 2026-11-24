@@ -1,5 +1,6 @@
 package com.adomako.payments.mcp;
 
+import com.adomako.payments.mcp.ToolOutputs.PaymentView;
 import com.adomako.payments.payment.PaymentService;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import org.springframework.core.annotation.Order;
@@ -39,6 +40,6 @@ class GetPaymentTool implements PaymentTool {
 
   @Override
   public Object call(ToolArguments arguments) {
-    throw new UnsupportedOperationException("not implemented yet");
+    return PaymentView.from(payments.get(arguments.requiredUuid("paymentId")));
   }
 }

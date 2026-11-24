@@ -228,3 +228,31 @@ Known gaps, to fix in Phase 3 (auth) and Phase 4 (infrastructure):
 - **Choice:** Read-only service methods, no new endpoints. `PaymentService.listRecent(merchantId, limit)` returns the newest payments first (limit 1–100, `MERCHANT_NOT_FOUND` for an unknown merchant), each with its refunds, loaded in one extra query instead of one per payment. `LedgerService.entriesForPayment` reads the entries with one JdbcClient SELECT and wraps them in `PaymentLedger`, which sums debits and credits per currency with `Money` and reports `balanced` and the merchant's payable balance (credits − debits, which should equal captured − refunded). An unknown payment id gives an empty ledger, because the ledger package doesn't depend on payments; callers check that the payment exists first.
 - **Alternatives:** Add `GET /v1/merchants/{id}/payments` and `GET /v1/payments/{id}/ledger` and have the tools call them; a summary type for the list without refunds.
 - **Trade-off:** These reads exist only for in-process callers until a REST client needs them. Adding endpoints later is a thin controller over the same methods.
+
+## 2026-11-23: MCP tools validate their own inputs; the SDK's schema check is off
+
+- **Context:** The MCP SDK checks tool arguments against each tool's JSON schema by default and answers invalid calls itself, before our handler runs. Those calls would be missing from the audit log and would get a different error shape.
+- **Choice:** `validateToolInputs(false)`. `ToolArguments` checks types (a decimal amount such as `10.50` is rejected with a "whole number of minor units" hint), and the existing Bean Validation constraints on `CreatePaymentRequest` / `RefundRequest` apply as they do for REST. Every call goes through `McpToolRunner`, which writes one `mcp.audit` line (tool, arguments, outcome, result, duration) and returns errors as `{code, title, detail, hint}` with the REST error codes.
+- **Alternatives:** Keep the SDK check and accept unaudited rejections; audit in a transport-level hook.
+- **Trade-off:** The schema the model sees and the checks in code must be kept in step by hand. The tool unit tests cover each rule.
+
+## 2026-11-23: MCP is read-only by default; write tools are not registered
+
+- **Context:** An agent connected to a payments system should not be able to move money unless someone has chosen to allow it.
+- **Choice:** `payments.mcp.read-only` (`MCP_READ_ONLY` in the `mcp` profile) defaults to true. `create_payment`, `capture_payment` and `refund_payment` are beans only when it is `false`, so in read-only mode they are never offered to the model. Write tools' descriptions start with `WRITE ACTION: moves money.`, and their MCP annotations say `readOnlyHint: false`, so clients can ask the user to confirm. Every write tool requires `idempotencyKey`.
+- **Alternatives:** Register the write tools and refuse calls at run time; writes on by default.
+- **Trade-off:** Turning writes on needs a restart. A tool the model can't see can't be called by mistake, and there is no refusal path to test.
+
+## 2026-11-23: Tool amounts are minor units, currency and a display string
+
+- **Context:** A model reading `"amount": 1050` may take it as 1050 dollars.
+- **Choice:** Every amount in a tool result is `{"amount": 1050, "currency": "CAD", "display": "10.50 CAD"}`, using `Money.toDisplayString()`. Inputs stay integer minor units with the currency stated (refunds use the payment's currency). Payments also show `refundable` (captured − refunded).
+- **Alternatives:** Plain integers as in the REST API; decimal strings.
+- **Trade-off:** Results are a little bigger than the REST responses, but the unit is never ambiguous and nothing is parsed as floating point.
+
+## 2026-11-23: get_ledger_balance reads in one REPEATABLE READ transaction
+
+- **Context:** The tool compares the payment's captured − refunded with the merchant payable balance from its ledger entries. Read in two separate transactions, a refund committed in between would make a healthy ledger look as if it doesn't match.
+- **Choice:** The tool's `call` is `@Transactional(readOnly = true, isolation = REPEATABLE_READ)`, so both reads see one snapshot.
+- **Alternatives:** One SQL query joining payments and ledger rows; accept rare false mismatches.
+- **Trade-off:** Slightly stronger isolation for one read-only call; the existing service methods are reused unchanged.
