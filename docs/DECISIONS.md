@@ -214,3 +214,10 @@ Known gaps, to fix in Phase 3 (auth) and Phase 4 (infrastructure):
 - **Choice:** The same jar runs as an MCP server under the `mcp` profile: no web server, JSON-RPC over stdin/stdout, built with the official MCP Java SDK (`io.modelcontextprotocol.sdk:mcp` 2.1.0). Tools are Spring beans that call the existing services. Logs go to stderr because stdout is the protocol channel. When the client closes stdin, the app shuts down so no JVM is left holding database connections.
 - **Alternatives:** Spring AI's MCP server starter (annotated tools, generated schemas), but every Spring AI 2.x release targets Spring Boot 4.1 or newer and this project is on 4.0.9. A separate server that calls the REST API, which would be more decoupled but needs its own runtime, duplicates error mapping, and can only be tested end-to-end. Streamable HTTP transport inside the running service, which Claude Desktop can't launch directly.
 - **Trade-off:** Tool input schemas are written by hand instead of generated. The MCP process is a second JVM on the same database, which is safe because locking, idempotency and the CHECK constraints live in PostgreSQL. It also runs Flyway and the idempotency-key cleanup job on startup, as the web app does.
+
+## 2026-11-23: REST and MCP share one idempotent write path
+
+- **Context:** An agent might create a payment through MCP and retry it through REST (or the reverse). With two copies of the idempotency wiring, the request fingerprints could drift apart and the same key could charge twice.
+- **Choice:** `PaymentCommands` holds the `IdempotencyService.execute` calls for create, capture and refund, with the fingerprint built from the REST method and path (`POST /v1/payments/{id}/refunds`). `PaymentController` and the MCP tools both call it.
+- **Alternatives:** Duplicate the calls in the MCP tools; have the MCP tools call the REST API over HTTP.
+- **Trade-off:** One more small class, and MCP fingerprints are named after REST paths. In exchange, a key means one operation however it arrives, and the existing idempotency tests cover both entry points.
