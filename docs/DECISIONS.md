@@ -207,3 +207,10 @@ Known gaps, to fix in Phase 3 (auth) and Phase 4 (infrastructure):
 - **Choice:** Only 2xx results are stored. A declined card is a 201 `FAILED` payment, so it is stored and never re-authorized. When the operation throws, the transaction rolls back and the key row with it, so the client can fix the request and retry with the same key.
 - **Alternatives:** Store 4xx business errors too (Stripe-like), using a savepoint to roll back the business writes while committing the key.
 - **Trade-off:** Much simpler and falls out of the single transaction. A retried failure re-runs, which is safe because a failed request changed nothing.
+
+## 2026-11-23: MCP server in-process, plain MCP Java SDK, stdio
+
+- **Context:** An AI assistant (e.g. Claude Desktop) should be able to read payments, move money and check the ledger through MCP tools, with every existing rule (validation, idempotency, row locks, ledger balance) still applied.
+- **Choice:** The same jar runs as an MCP server under the `mcp` profile: no web server, JSON-RPC over stdin/stdout, built with the official MCP Java SDK (`io.modelcontextprotocol.sdk:mcp` 2.1.0). Tools are Spring beans that call the existing services. Logs go to stderr because stdout is the protocol channel. When the client closes stdin, the app shuts down so no JVM is left holding database connections.
+- **Alternatives:** Spring AI's MCP server starter (annotated tools, generated schemas), but every Spring AI 2.x release targets Spring Boot 4.1 or newer and this project is on 4.0.9. A separate server that calls the REST API, which would be more decoupled but needs its own runtime, duplicates error mapping, and can only be tested end-to-end. Streamable HTTP transport inside the running service, which Claude Desktop can't launch directly.
+- **Trade-off:** Tool input schemas are written by hand instead of generated. The MCP process is a second JVM on the same database, which is safe because locking, idempotency and the CHECK constraints live in PostgreSQL. It also runs Flyway and the idempotency-key cleanup job on startup, as the web app does.

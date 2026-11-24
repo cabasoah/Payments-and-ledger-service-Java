@@ -1,0 +1,11 @@
+# Runs the app as an MCP server over stdio for an AI assistant (e.g. Claude Desktop).
+# stdout carries the MCP protocol, so there is no web server, no banner, and logs go to stderr
+# (see logback-spring.xml).
+spring:
+  main:
+    web-application-type: none
+    banner-mode: off
+
+payments:
+  mcp:
+    enabled: true
