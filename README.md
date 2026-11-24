@@ -147,7 +147,16 @@ curl -s -X POST localhost:8080/v1/merchants -H 'Content-Type: application/json' 
 
 ### Connect Claude Desktop
 
-Open Claude Desktop → **Settings → Developer → Edit Config**, which opens `claude_desktop_config.json` (on Windows `%APPDATA%\Claude\claude_desktop_config.json`, on macOS `~/Library/Application Support/Claude/claude_desktop_config.json`). Add the server, replacing both paths with the absolute path to your clone:
+Claude Desktop reads MCP servers from `claude_desktop_config.json`:
+
+| OS | Config file |
+|---|---|
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+
+1. **Quit Claude Desktop completely** (on Windows, also from the system tray icon). It saves its own settings to this file and can overwrite edits made while it is running.
+2. Open the file in an editor. It may already contain the app's own keys (such as `"preferences"`): keep them, and add `"mcpServers"` alongside them as another top-level key. If the file doesn't exist, create it.
+3. Add the server, replacing both paths with the absolute path to your clone:
 
 ```json
 {
@@ -171,7 +180,11 @@ Open Claude Desktop → **Settings → Developer → Edit Config**, which opens 
 }
 ```
 
-Restart Claude Desktop. Leave out `MCP_READ_ONLY` (or set it to `"true"`) to offer only the read tools. If Claude Desktop can't find `java`, put the full path to the JDK 21 `java` executable in `command`. Server logs are in Claude Desktop's MCP log files (`mcp-server-payments-ledger.log`).
+4. Start Claude Desktop. The payments tools appear in the chat's tools list.
+
+Leave out `MCP_READ_ONLY` (or set it to `"true"`) to offer only the read tools.
+
+If the tools don't appear, check Claude Desktop's logs (Windows `%APPDATA%\Claude\logs`, macOS `~/Library/Logs/Claude`): `mcp.log`, and `mcp-server-payments-ledger.log` once it has tried to start the server. Common causes: `java` isn't on the PATH Claude Desktop sees (put the full path to the JDK 21 `java` executable in `command`), Postgres isn't running, or the jar hasn't been built.
 
 ### Example: refund part of a payment, then check the ledger
 
