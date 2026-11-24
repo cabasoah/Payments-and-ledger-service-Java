@@ -91,6 +91,19 @@ public class PaymentService {
     return PaymentResponse.from(payment, refunds.findByPaymentIdOrderByCreatedAtAsc(paymentId));
   }
 
+  /** Largest page {@link #listRecent} returns. */
+  public static final int MAX_LIST_LIMIT = 100;
+
+  /**
+   * The merchant's most recent payments, newest first, each with its refunds.
+   *
+   * @param limit 1 to {@link #MAX_LIST_LIMIT}
+   */
+  @Transactional(readOnly = true)
+  public List<PaymentResponse> listRecent(UUID merchantId, int limit) {
+    throw new UnsupportedOperationException("not implemented yet");
+  }
+
   private Payment lockPayment(UUID paymentId) {
     return payments.findByIdForUpdate(paymentId).orElseThrow(() -> notFound(paymentId));
   }

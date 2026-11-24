@@ -56,6 +56,12 @@ public class LedgerService {
             List.of(new Posting(payable, DEBIT, amount), new Posting(receivable, CREDIT, amount))));
   }
 
+  /** Every entry recorded for this payment. Empty if nothing has been captured. */
+  @Transactional(readOnly = true)
+  public PaymentLedger entriesForPayment(UUID paymentId) {
+    throw new UnsupportedOperationException("not implemented yet");
+  }
+
   private static void requireBalanced(Journal journal) {
     if (journal.postings().size() < 2) {
       throw new UnbalancedJournalException(
