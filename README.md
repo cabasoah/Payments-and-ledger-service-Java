@@ -111,6 +111,73 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   #
 > **Cost:** about **$40/month** if left running (estimate from AWS on-demand prices), so tear it down when you're not using it.
 > This setup is deliberately minimal and **not production-ready** (no HTTPS, no authentication, single instance). See the [full list of gaps](docs/DECISIONS.md#2026-11-17-what-the-minimal-aws-setup-is-not-ready-for), which a later phase addresses.
 
+## Use it from an AI assistant (MCP)
+
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets an AI assistant such as Claude Desktop call an application's tools. Here it lets the assistant look up payments, move money and check the ledger through the same service code as the REST API, so validation, idempotency, row locking and the ledger balance rules all still apply.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `get_payment` | read | Status, amount, captured, refunded and refundable amounts, refunds |
+| `list_payments` | read | A merchant's recent payments, newest first (`limit` 1–100, default 20) |
+| `get_ledger_balance` | read | A payment's ledger entries, debit/credit totals per currency, `balanced`, and `matchesPayment` (merchant payable = captured − refunded) |
+| `create_payment` | **write** | Create and authorize a payment. Needs `idempotencyKey` |
+| `capture_payment` | **write** | Capture an authorized payment. Needs `idempotencyKey` |
+| `refund_payment` | **write** | Refund part or all of a captured payment. Needs `idempotencyKey` |
+
+- **Read-only by default.** The write tools are only offered when `MCP_READ_ONLY=false`, and their descriptions start with `WRITE ACTION: moves money.`
+- **Money is never ambiguous.** Inputs are integer minor units with a currency; every amount returned looks like `{"amount": 1050, "currency": "CAD", "display": "10.50 CAD"}`.
+- **Safe retries.** A retried write with the same `idempotencyKey` returns the original result (`"replayed": true`) instead of acting twice. A key works the same through REST and MCP.
+- **Clear errors.** Failures return the REST error code with the backend's message and a hint, e.g. `REFUND_EXCEEDS_CAPTURED`: "Refund of 8.00 CAD exceeds the remaining refundable 7.50 CAD".
+- **Audit log.** Every tool call is logged with its arguments, outcome and result to stderr and to `MCP_AUDIT_LOG` (default `logs/mcp-audit.log`).
+
+### Run it
+
+The MCP server is the same jar started with the `mcp` profile. The assistant launches it and talks to it over stdin/stdout.
+
+```bash
+docker compose up -d --wait postgres     # the database
+./mvnw -DskipTests package               # builds target/payments-ledger-0.0.1-SNAPSHOT.jar
+```
+
+There is no merchant tool, so create a merchant through the REST API first and note its `id` (run `./mvnw spring-boot:run -Dspring-boot.run.profiles=local` in another terminal, then):
+
+```bash
+curl -s -X POST localhost:8080/v1/merchants -H 'Content-Type: application/json' -d '{"name":"Acme Coffee"}'
+```
+
+### Connect Claude Desktop
+
+Open Claude Desktop → **Settings → Developer → Edit Config**, which opens `claude_desktop_config.json` (on Windows `%APPDATA%\Claude\claude_desktop_config.json`, on macOS `~/Library/Application Support/Claude/claude_desktop_config.json`). Add the server, replacing both paths with the absolute path to your clone:
+
+```json
+{
+  "mcpServers": {
+    "payments-ledger": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "C:\\path\\to\\payments-ledger\\target\\payments-ledger-0.0.1-SNAPSHOT.jar",
+        "--spring.profiles.active=mcp"
+      ],
+      "env": {
+        "DB_URL": "jdbc:postgresql://localhost:5433/payments",
+        "DB_USER": "payments",
+        "DB_PASSWORD": "payments",
+        "MCP_READ_ONLY": "false",
+        "MCP_AUDIT_LOG": "C:\\path\\to\\payments-ledger\\logs\\mcp-audit.log"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Leave out `MCP_READ_ONLY` (or set it to `"true"`) to offer only the read tools. If Claude Desktop can't find `java`, put the full path to the JDK 21 `java` executable in `command`. Server logs are in Claude Desktop's MCP log files (`mcp-server-payments-ledger.log`).
+
+### Example: refund part of a payment, then check the ledger
+
+<!-- TODO: replace with a transcript from a real Claude Desktop run. Do not invent output. -->
+> **Placeholder:** this will show a real conversation: asking Claude to refund part of a payment, then to confirm the ledger still balances, with the tool calls it made. It will be added from an actual run.
+
 ## Roadmap
 
 - [x] Money type, payment state machine, database constraints
@@ -119,6 +186,7 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   #
 - [x] Docker image and minimal AWS deployment (Terraform: ECS Fargate, RDS, Secrets Manager)
 - [ ] API key authentication per merchant
 - [x] Idempotency keys (safe retries), including under concurrent duplicates
+- [x] MCP server so an AI assistant can read payments, move money and check the ledger
 - [ ] Transactional outbox and RabbitMQ events
 - [ ] Signed webhooks with retries and a dead-letter queue
 - [ ] Load testing (k6), metrics and tracing (OpenTelemetry, Prometheus, Grafana)
@@ -222,10 +290,11 @@ One `MERCHANT_PAYABLE` account per merchant per currency (what we owe the mercha
 ./mvnw spotless:check     # formatting (google-java-format)
 ```
 
-- **Unit tests** (`*Test`): `Money`, the full status transition matrix, the `Payment` rules, and `LedgerService`.
+- **Unit tests** (`*Test`): `Money`, the full status transition matrix, the `Payment` rules, `LedgerService`, and each MCP tool's input validation, output shape, error mapping and audit log line.
 - **Integration tests** (`*IT`), against real PostgreSQL in Docker:
   - `AbstractIT`: database constraints, ledger triggers, the balance check. Each test is rolled back.
   - `AbstractApiIT`: HTTP tests against the running service, on their own database. These cover the happy path, every error code, request validation, and concurrent refunds and captures. The ledger audit must pass after every test.
+  - MCP tools (`McpToolsIT`, `McpReadOnlyIT`, `McpStdioIT`): a retried or concurrent `create_payment` with one key creates one payment, an over-refund is rejected and changes nothing, the ledger balances after create, capture and refund, read-only mode offers only the read tools, and real JSON-RPC over the stdio transport.
 
 </details>
 
@@ -266,6 +335,7 @@ src/main/java/com/adomako/payments/
   payment/     payment aggregate, state machine, API, refunds
   ledger/      accounts, journals, balance check
   processor/   simulated card processor
+  mcp/         MCP server and tools for AI assistants
 src/main/resources/db/migration/   Flyway SQL migrations
 infra/terraform/                   AWS infrastructure (ECS Fargate, RDS, ECR)
 scripts/                           deploy, app-url and teardown scripts
