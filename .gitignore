@@ -23,3 +23,6 @@ infra/terraform/.terraform/
 *.tfvars
 !*.tfvars.example
 crash.log
+
+# MCP audit log (local runs)
+logs/

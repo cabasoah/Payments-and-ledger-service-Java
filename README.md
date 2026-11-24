@@ -111,6 +111,128 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   #
 > **Cost:** about **$40/month** if left running (estimate from AWS on-demand prices), so tear it down when you're not using it.
 > This setup is deliberately minimal and **not production-ready** (no HTTPS, no authentication, single instance). See the [full list of gaps](docs/DECISIONS.md#2026-11-17-what-the-minimal-aws-setup-is-not-ready-for), which a later phase addresses.
 
+## Use it from an AI assistant (MCP)
+
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets an AI assistant such as Claude Desktop call an application's tools. Here it lets the assistant look up payments, move money and check the ledger through the same service code as the REST API, so validation, idempotency, row locking and the ledger balance rules all still apply.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `get_payment` | read | Status, amount, captured, refunded and refundable amounts, refunds |
+| `list_payments` | read | A merchant's recent payments, newest first (`limit` 1–100, default 20) |
+| `get_ledger_balance` | read | A payment's ledger entries, debit/credit totals per currency, `balanced`, and `matchesPayment` (merchant payable = captured − refunded) |
+| `create_payment` | **write** | Create and authorize a payment. Needs `idempotencyKey` |
+| `capture_payment` | **write** | Capture an authorized payment. Needs `idempotencyKey` |
+| `refund_payment` | **write** | Refund part or all of a captured payment. Needs `idempotencyKey` |
+
+- **Read-only by default.** The write tools are only offered when `MCP_READ_ONLY=false`, and their descriptions start with `WRITE ACTION: moves money.`
+- **Money is never ambiguous.** Inputs are integer minor units with a currency; every amount returned looks like `{"amount": 1050, "currency": "CAD", "display": "10.50 CAD"}`.
+- **Safe retries.** A retried write with the same `idempotencyKey` returns the original result (`"replayed": true`) instead of acting twice. A key works the same through REST and MCP.
+- **Clear errors.** Failures return the REST error code with the backend's message and a hint, e.g. `REFUND_EXCEEDS_CAPTURED`: "Refund of 8.00 CAD exceeds the remaining refundable 7.50 CAD".
+- **Audit log.** Every tool call is logged with its arguments, outcome and result to stderr and to `MCP_AUDIT_LOG` (default `logs/mcp-audit.log`).
+
+### Run it
+
+The MCP server is the same jar started with the `mcp` profile. The assistant launches it and talks to it over stdin/stdout.
+
+```bash
+docker compose up -d --wait postgres     # the database
+./mvnw -DskipTests package               # builds target/payments-ledger-0.0.1-SNAPSHOT.jar
+```
+
+There is no merchant tool, so create a merchant through the REST API first and note its `id` (run `./mvnw spring-boot:run -Dspring-boot.run.profiles=local` in another terminal, then):
+
+```bash
+curl -s -X POST localhost:8080/v1/merchants -H 'Content-Type: application/json' -d '{"name":"Acme Coffee"}'
+```
+
+### Connect Claude Desktop
+
+Claude Desktop reads MCP servers from `claude_desktop_config.json`:
+
+| OS | Config file |
+|---|---|
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+
+1. **Quit Claude Desktop completely** (on Windows, also from the system tray icon). It saves its own settings to this file and can overwrite edits made while it is running.
+2. Open the file in an editor. It may already contain the app's own keys (such as `"preferences"`): keep them, and add `"mcpServers"` alongside them as another top-level key. If the file doesn't exist, create it.
+3. Add the server, replacing both paths with the absolute path to your clone:
+
+```json
+{
+  "mcpServers": {
+    "payments-ledger": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "C:\\path\\to\\payments-ledger\\target\\payments-ledger-0.0.1-SNAPSHOT.jar",
+        "--spring.profiles.active=mcp"
+      ],
+      "env": {
+        "DB_URL": "jdbc:postgresql://localhost:5433/payments",
+        "DB_USER": "payments",
+        "DB_PASSWORD": "payments",
+        "MCP_READ_ONLY": "false",
+        "MCP_AUDIT_LOG": "C:\\path\\to\\payments-ledger\\logs\\mcp-audit.log"
+      }
+    }
+  }
+}
+```
+
+4. Start Claude Desktop. The payments tools appear in the chat's tools list.
+
+Leave out `MCP_READ_ONLY` (or set it to `"true"`) to offer only the read tools.
+
+If the tools don't appear, check Claude Desktop's logs (Windows `%APPDATA%\Claude\logs`, macOS `~/Library/Logs/Claude`): `mcp.log`, and `mcp-server-payments-ledger.log` once it has tried to start the server. Common causes: `java` isn't on the PATH Claude Desktop sees (put the full path to the JDK 21 `java` executable in `command`), Postgres isn't running, or the jar hasn't been built.
+
+### Example: refund part of a payment, then check the ledger
+
+A real Claude Desktop session against a local database (2026-11-23), with writes enabled. Tool results are shortened to the fields that matter; the tool calls match the server's audit log.
+
+**You:** Create a 25.00 CAD payment for merchant `0bf138b8-8c38-4d1d-9256-bfe2e5e64eb5` with card `tok_visa_ok`, then capture it.
+
+> `create_payment` `{merchantId: 0bf138b8-…, amount: 2500, currency: CAD, cardToken: tok_visa_ok, idempotencyKey: create-0bf138b8-2500CAD-20261123-a7f3c9e1}`
+> → `id: 0073eb64-c506-45b5-98b2-d8fcf69f363e`, `status: AUTHORIZED`, `amount: 25.00 CAD`, `replayed: false`
+>
+> `capture_payment` `{paymentId: 0073eb64-…, idempotencyKey: capture-0073eb64-20261123-b2d8e4f6}`
+> → `status: CAPTURED`, `captured: 25.00 CAD`, `refundable: 25.00 CAD`
+
+**Claude:** I created the 25.00 CAD payment and captured it. Payment ID: 0073eb64-c506-45b5-98b2-d8fcf69f363e. Status: CAPTURED, so the full 25.00 CAD has been collected and recorded in the ledger. Refundable: 25.00 CAD.
+
+**You:** Refund 7.50 CAD of that payment.
+
+> `refund_payment` `{paymentId: 0073eb64-…, amount: 750, idempotencyKey: refund-0073eb64-750CAD-20261123-c4e9a1d2}`
+> → refund `2ccd70f9-8a0e-4bb5-8bb3-10720e687aeb` of `7.50 CAD`; payment `status: PARTIALLY_REFUNDED`, `refunded: 7.50 CAD`, `refundable: 17.50 CAD`
+
+**Claude:** I refunded 7.50 CAD. Payment status: PARTIALLY_REFUNDED (25.00 CAD captured, 7.50 CAD refunded). Still refundable: 17.50 CAD.
+
+**You:** Now try refunding 20.00 more.
+
+*(no tool call)*
+
+**Claude:** I didn't send that refund because only 17.50 CAD is left to refund on this payment. It captured 25.00 CAD and 7.50 CAD has already gone back, so a 20.00 CAD refund would be rejected and nothing would change. Do you want me to refund the remaining 17.50 CAD instead?
+
+**You:** Check that the ledger for that payment balances.
+
+> `get_payment` `{paymentId: 0073eb64-…}` → `status: PARTIALLY_REFUNDED`, `refundable: 17.50 CAD`
+>
+> `get_ledger_balance` `{paymentId: 0073eb64-…}` → `balanced: true`, `matchesPayment: true`, `merchantPayableBalance: 17.50 CAD`, `expectedMerchantPayableBalance: 17.50 CAD`, totals CAD debits `32.50` / credits `32.50`, 4 entries
+
+**Claude:** The ledger for this payment balances, and it matches the payment record.
+
+| Journal | Account | Debit | Credit |
+|---|---|---|---|
+| CAPTURE | PROCESSOR_RECEIVABLE | 25.00 | |
+| CAPTURE | MERCHANT_PAYABLE | | 25.00 |
+| REFUND | MERCHANT_PAYABLE | 7.50 | |
+| REFUND | PROCESSOR_RECEIVABLE | | 7.50 |
+| **Total (CAD)** | | **32.50** | **32.50** |
+
+Merchant payable: 17.50 CAD, which is the 25.00 CAD captured minus the 7.50 CAD refunded. There are no entries for the 20.00 CAD refund because I didn't send it.
+
+In this run Claude declined the over-refund itself, using the `refundable` amount from the earlier result, so the server never saw it. Had it sent the call, the backend would have rejected it with `REFUND_EXCEEDS_CAPTURED` and changed nothing; `McpToolsIT.overRefundIsRejectedAndChangesNothing` tests exactly that.
+
 ## Roadmap
 
 - [x] Money type, payment state machine, database constraints
@@ -119,6 +241,7 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   #
 - [x] Docker image and minimal AWS deployment (Terraform: ECS Fargate, RDS, Secrets Manager)
 - [ ] API key authentication per merchant
 - [x] Idempotency keys (safe retries), including under concurrent duplicates
+- [x] MCP server so an AI assistant can read payments, move money and check the ledger
 - [ ] Transactional outbox and RabbitMQ events
 - [ ] Signed webhooks with retries and a dead-letter queue
 - [ ] Load testing (k6), metrics and tracing (OpenTelemetry, Prometheus, Grafana)
@@ -222,10 +345,11 @@ One `MERCHANT_PAYABLE` account per merchant per currency (what we owe the mercha
 ./mvnw spotless:check     # formatting (google-java-format)
 ```
 
-- **Unit tests** (`*Test`): `Money`, the full status transition matrix, the `Payment` rules, and `LedgerService`.
+- **Unit tests** (`*Test`): `Money`, the full status transition matrix, the `Payment` rules, `LedgerService`, and each MCP tool's input validation, output shape, error mapping and audit log line.
 - **Integration tests** (`*IT`), against real PostgreSQL in Docker:
   - `AbstractIT`: database constraints, ledger triggers, the balance check. Each test is rolled back.
   - `AbstractApiIT`: HTTP tests against the running service, on their own database. These cover the happy path, every error code, request validation, and concurrent refunds and captures. The ledger audit must pass after every test.
+  - MCP tools (`McpToolsIT`, `McpReadOnlyIT`, `McpStdioIT`): a retried or concurrent `create_payment` with one key creates one payment, an over-refund is rejected and changes nothing, the ledger balances after create, capture and refund, read-only mode offers only the read tools, and real JSON-RPC over the stdio transport.
 
 </details>
 
@@ -266,6 +390,7 @@ src/main/java/com/adomako/payments/
   payment/     payment aggregate, state machine, API, refunds
   ledger/      accounts, journals, balance check
   processor/   simulated card processor
+  mcp/         MCP server and tools for AI assistants
 src/main/resources/db/migration/   Flyway SQL migrations
 infra/terraform/                   AWS infrastructure (ECS Fargate, RDS, ECR)
 scripts/                           deploy, app-url and teardown scripts

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+  <!-- Normal runs: Spring Boot's default console logging. -->
+  <springProfile name="!mcp">
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+    <root level="INFO">
+      <appender-ref ref="CONSOLE"/>
+    </root>
+  </springProfile>
+
+  <!-- MCP over stdio: stdout is the protocol channel, so all logs go to stderr. -->
+  <springProfile name="mcp">
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+      <target>System.err</target>
+      <encoder>
+        <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+        <charset>${CONSOLE_LOG_CHARSET}</charset>
+      </encoder>
+    </appender>
+    <!-- One line per tool call (arguments, outcome, result), also kept in a file. -->
+    <appender name="MCP_AUDIT_FILE" class="ch.qos.logback.core.FileAppender">
+      <file>${MCP_AUDIT_LOG:-logs/mcp-audit.log}</file>
+      <encoder>
+        <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %msg%n</pattern>
+        <charset>UTF-8</charset>
+      </encoder>
+    </appender>
+    <logger name="mcp.audit" level="INFO">
+      <appender-ref ref="MCP_AUDIT_FILE"/>
+    </logger>
+    <root level="INFO">
+      <appender-ref ref="STDERR"/>
+    </root>
+  </springProfile>
+</configuration>

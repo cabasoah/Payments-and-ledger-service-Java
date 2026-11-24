@@ -1,8 +1,6 @@
 package com.adomako.payments.payment;
 
-import com.adomako.payments.idempotency.IdempotencyService;
 import com.adomako.payments.idempotency.IdempotentResponse;
-import com.adomako.payments.idempotency.RequestFingerprint;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -57,16 +55,11 @@ public class PaymentController {
           + " Keys expire after 24 hours.";
 
   private final PaymentService paymentService;
-  private final IdempotencyService idempotency;
-  private final RequestFingerprint fingerprint;
+  private final PaymentCommands commands;
 
-  public PaymentController(
-      PaymentService paymentService,
-      IdempotencyService idempotency,
-      RequestFingerprint fingerprint) {
+  public PaymentController(PaymentService paymentService, PaymentCommands commands) {
     this.paymentService = paymentService;
-    this.idempotency = idempotency;
-    this.fingerprint = fingerprint;
+    this.commands = commands;
   }
 
   /** Adds {@code Idempotent-Replayed: true} when the response came from storage. */
@@ -137,14 +130,7 @@ public class PaymentController {
           @RequestHeader(name = IDEMPOTENCY_KEY, required = false)
           String key,
       @Valid @RequestBody CreatePaymentRequest request) {
-    IdempotentResponse<PaymentResponse> result =
-        idempotency.execute(
-            request.merchantId(),
-            key,
-            fingerprint.of("POST", "/v1/payments", request),
-            PaymentResponse.class,
-            HttpStatus.CREATED.value(),
-            () -> paymentService.create(request));
+    IdempotentResponse<PaymentResponse> result = commands.create(key, request);
     return ResponseEntity.created(URI.create("/v1/payments/" + result.body().id()))
         .headers(replayHeaders(result))
         .body(result.body());
@@ -179,14 +165,7 @@ public class PaymentController {
           @RequestHeader(name = IDEMPOTENCY_KEY, required = false)
           String key,
       @PathVariable UUID id) {
-    IdempotentResponse<PaymentResponse> result =
-        idempotency.execute(
-            paymentService.merchantIdOf(id),
-            key,
-            fingerprint.of("POST", "/v1/payments/" + id + "/capture", null),
-            PaymentResponse.class,
-            HttpStatus.OK.value(),
-            () -> paymentService.capture(id));
+    IdempotentResponse<PaymentResponse> result = commands.capture(key, id);
     return ResponseEntity.ok().headers(replayHeaders(result)).body(result.body());
   }
 
@@ -244,14 +223,7 @@ public class PaymentController {
           String key,
       @PathVariable UUID id,
       @Valid @RequestBody RefundRequest request) {
-    IdempotentResponse<RefundResponse> result =
-        idempotency.execute(
-            paymentService.merchantIdOf(id),
-            key,
-            fingerprint.of("POST", "/v1/payments/" + id + "/refunds", request),
-            RefundResponse.class,
-            HttpStatus.CREATED.value(),
-            () -> paymentService.refund(id, request));
+    IdempotentResponse<RefundResponse> result = commands.refund(key, id, request);
     return ResponseEntity.status(HttpStatus.CREATED)
         .headers(replayHeaders(result))
         .body(result.body());
