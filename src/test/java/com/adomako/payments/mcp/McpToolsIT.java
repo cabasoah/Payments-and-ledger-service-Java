@@ -90,7 +90,7 @@ class McpToolsIT extends AbstractApiIT {
         .single();
   }
 
-  private static Map<String, Object> money(long amount, String display) {
+  private static Map<String, Object> money(int amount, String display) {
     return Map.of("amount", amount, "currency", "CAD", "display", display);
   }
 
