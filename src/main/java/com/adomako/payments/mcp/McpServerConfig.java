@@ -8,7 +8,7 @@ import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import io.modelcontextprotocol.spec.McpServerTransportProvider;
 import java.io.InputStream;
-import org.springframework.beans.factory.ObjectProvider;
+import java.util.List;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -37,18 +37,28 @@ public class McpServerConfig {
     return new StdioServerTransportProvider(McpJsonDefaults.getMapper(), in, System.out);
   }
 
-  private static void shutDown(ConfigurableApplicationContext context) {
-    new Thread(() -> System.exit(SpringApplication.exit(context)), "mcp-shutdown").start();
+  @Bean(destroyMethod = "closeGracefully")
+  McpSyncServer mcpServer(McpServerTransportProvider transport, McpToolRegistry registry) {
+    return build(transport, registry.specifications());
   }
 
-  @Bean(destroyMethod = "closeGracefully")
-  McpSyncServer mcpServer(
-      McpServerTransportProvider transport, ObjectProvider<SyncToolSpecification> tools) {
+  /**
+   * The SDK's own JSON-schema check of tool inputs is off: it would reject a call before it reaches
+   * {@link McpToolRunner}, so the call would not be audited and its error would not have our
+   * format. The tools validate their inputs themselves.
+   */
+  static McpSyncServer build(
+      McpServerTransportProvider transport, List<SyncToolSpecification> tools) {
     return McpServer.sync(transport)
         .serverInfo("payments-ledger", "0.0.1")
         .instructions(INSTRUCTIONS)
         .capabilities(ServerCapabilities.builder().tools(false).build())
-        .tools(tools.orderedStream().toList())
+        .validateToolInputs(false)
+        .tools(tools)
         .build();
+  }
+
+  private static void shutDown(ConfigurableApplicationContext context) {
+    new Thread(() -> System.exit(SpringApplication.exit(context)), "mcp-shutdown").start();
   }
 }

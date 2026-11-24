@@ -9,3 +9,5 @@ spring:
 payments:
   mcp:
     enabled: true
+    # Read-only unless MCP_READ_ONLY=false: create, capture and refund are not offered at all.
+    read-only: ${MCP_READ_ONLY:true}
