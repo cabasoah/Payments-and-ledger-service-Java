@@ -188,8 +188,50 @@ If the tools don't appear, check Claude Desktop's logs (Windows `%APPDATA%\Claud
 
 ### Example: refund part of a payment, then check the ledger
 
-<!-- TODO: replace with a transcript from a real Claude Desktop run. Do not invent output. -->
-> **Placeholder:** this will show a real conversation: asking Claude to refund part of a payment, then to confirm the ledger still balances, with the tool calls it made. It will be added from an actual run.
+A real Claude Desktop session against a local database (2026-11-23), with writes enabled. Tool results are shortened to the fields that matter; the tool calls match the server's audit log.
+
+**You:** Create a 25.00 CAD payment for merchant `0bf138b8-8c38-4d1d-9256-bfe2e5e64eb5` with card `tok_visa_ok`, then capture it.
+
+> `create_payment` `{merchantId: 0bf138b8-…, amount: 2500, currency: CAD, cardToken: tok_visa_ok, idempotencyKey: create-0bf138b8-2500CAD-20261123-a7f3c9e1}`
+> → `id: 0073eb64-c506-45b5-98b2-d8fcf69f363e`, `status: AUTHORIZED`, `amount: 25.00 CAD`, `replayed: false`
+>
+> `capture_payment` `{paymentId: 0073eb64-…, idempotencyKey: capture-0073eb64-20261123-b2d8e4f6}`
+> → `status: CAPTURED`, `captured: 25.00 CAD`, `refundable: 25.00 CAD`
+
+**Claude:** I created the 25.00 CAD payment and captured it. Payment ID: 0073eb64-c506-45b5-98b2-d8fcf69f363e. Status: CAPTURED, so the full 25.00 CAD has been collected and recorded in the ledger. Refundable: 25.00 CAD.
+
+**You:** Refund 7.50 CAD of that payment.
+
+> `refund_payment` `{paymentId: 0073eb64-…, amount: 750, idempotencyKey: refund-0073eb64-750CAD-20261123-c4e9a1d2}`
+> → refund `2ccd70f9-8a0e-4bb5-8bb3-10720e687aeb` of `7.50 CAD`; payment `status: PARTIALLY_REFUNDED`, `refunded: 7.50 CAD`, `refundable: 17.50 CAD`
+
+**Claude:** I refunded 7.50 CAD. Payment status: PARTIALLY_REFUNDED (25.00 CAD captured, 7.50 CAD refunded). Still refundable: 17.50 CAD.
+
+**You:** Now try refunding 20.00 more.
+
+*(no tool call)*
+
+**Claude:** I didn't send that refund because only 17.50 CAD is left to refund on this payment. It captured 25.00 CAD and 7.50 CAD has already gone back, so a 20.00 CAD refund would be rejected and nothing would change. Do you want me to refund the remaining 17.50 CAD instead?
+
+**You:** Check that the ledger for that payment balances.
+
+> `get_payment` `{paymentId: 0073eb64-…}` → `status: PARTIALLY_REFUNDED`, `refundable: 17.50 CAD`
+>
+> `get_ledger_balance` `{paymentId: 0073eb64-…}` → `balanced: true`, `matchesPayment: true`, `merchantPayableBalance: 17.50 CAD`, `expectedMerchantPayableBalance: 17.50 CAD`, totals CAD debits `32.50` / credits `32.50`, 4 entries
+
+**Claude:** The ledger for this payment balances, and it matches the payment record.
+
+| Journal | Account | Debit | Credit |
+|---|---|---|---|
+| CAPTURE | PROCESSOR_RECEIVABLE | 25.00 | |
+| CAPTURE | MERCHANT_PAYABLE | | 25.00 |
+| REFUND | MERCHANT_PAYABLE | 7.50 | |
+| REFUND | PROCESSOR_RECEIVABLE | | 7.50 |
+| **Total (CAD)** | | **32.50** | **32.50** |
+
+Merchant payable: 17.50 CAD, which is the 25.00 CAD captured minus the 7.50 CAD refunded. There are no entries for the 20.00 CAD refund because I didn't send it.
+
+In this run Claude declined the over-refund itself, using the `refundable` amount from the earlier result, so the server never saw it. Had it sent the call, the backend would have rejected it with `REFUND_EXCEEDS_CAPTURED` and changed nothing; `McpToolsIT.overRefundIsRejectedAndChangesNothing` tests exactly that.
 
 ## Roadmap
 
